@@ -228,11 +228,17 @@ export function chiselMiddleware(
           if (!content.includes(originalComponent)) continue;
 
           // Rewrite named import: import { ..., Zap, ... } from "lucide-react"
-          const importRegex = new RegExp(
-            `(import\\s*\\{[^}]*?)\\b${escapeRegex(originalComponent)}\\b([^}]*}\\s*from\\s*["']${escapeRegex(importSource)}["'])`,
+          // Parse specifiers, rename, deduplicate to avoid `import { Rocket, Rocket }`
+          const importLineRegex = new RegExp(
+            `(import\\s*\\{)([^}]*)(}\\s*from\\s*["']${escapeRegex(importSource)}["'])`,
             "g"
           );
-          content = content.replace(importRegex, `$1${replacementComponent}$2`);
+          content = content.replace(importLineRegex, (_match, pre, specifiers, post) => {
+            const names = specifiers.split(",").map((s: string) => s.trim()).filter(Boolean);
+            const renamed = names.map((n: string) => n === originalComponent ? replacementComponent : n);
+            const unique = [...new Set(renamed)];
+            return `${pre} ${unique.join(", ")} ${post}`;
+          });
 
           // Rewrite JSX usage: <Zap or <Zap> or <Zap/> or <Zap  (with props)
           const jsxRegex = new RegExp(`<${escapeRegex(originalComponent)}(\\s|\\/>|>)`, "g");
