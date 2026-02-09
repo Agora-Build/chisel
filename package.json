@@ -1,5 +1,5 @@
 {
-  "name": "chisel-dev",
+  "name": "@agora-build/chisel-dev",
   "version": "0.1.0",
   "type": "module",
   "description": "Framework-agnostic dev style panel for live CSS variable editing, custom CSS injection, and content editing",
