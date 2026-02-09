@@ -181,8 +181,8 @@ export class DevPanel {
     if (!this.root) return;
     const btn = document.createElement("button");
     btn.setAttribute("data-chisel", "toggle");
-    btn.setAttribute("aria-label", "Open Dev Style Panel");
-    btn.textContent = "Dev Styles";
+    btn.setAttribute("aria-label", "Open Chisel Dev Panel");
+    btn.textContent = "Chisel Dev";
     const pos = this.options.position;
     btn.style.cssText = `position:fixed;bottom:16px;${pos}:16px;z-index:99999;padding:8px 16px;background:${COLORS.blue};color:#fff;border:none;border-radius:6px;font-size:13px;font-family:system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);`;
     btn.addEventListener("click", () => this.toggle());
@@ -211,7 +211,7 @@ export class DevPanel {
     panel.innerHTML = `
       <div style="padding:12px 16px;border-bottom:1px solid ${COLORS.border};font-size:14px;font-weight:600;line-height:1.4;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span>Dev Style Panel</span>
+          <span>Chisel Dev</span>
           <button data-chisel="close" style="background:none;border:none;color:${COLORS.textMuted};cursor:pointer;font-size:18px;font-family:system-ui;" aria-label="Close panel">x</button>
         </div>
         <div style="font-size:11px;color:${COLORS.textDim};margin-top:2px;">
