@@ -1,0 +1,49 @@
+{
+  "name": "chisel-dev",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Framework-agnostic dev style panel for live CSS variable editing, custom CSS injection, and content editing",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "import": "./dist/middleware.js",
+      "require": "./dist/middleware.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "require": "./dist/react.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "peerDependencies": {
+    "express": ">=4.0.0",
+    "react": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/react": "^19.2.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.6.3"
+  }
+}
