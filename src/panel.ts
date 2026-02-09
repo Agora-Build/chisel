@@ -291,6 +291,11 @@ export class DevPanel {
       } else if (chiselAttr === "apply-icon") {
         if (this.iconReplacement.trim() && this.detectedIcon) {
           const comp = this.iconReplacement.trim();
+          // Mark the icon on the page so the user sees it was captured
+          const svgEl = this.detectedIcon.element;
+          svgEl.style.outline = "2px dashed #f97316";
+          svgEl.style.outlineOffset = "2px";
+          svgEl.style.opacity = "0.5";
           this.iconChanges.push({
             originalComponent: this.detectedIcon.componentName,
             replacementComponent: comp,
@@ -854,6 +859,10 @@ export class DevPanel {
             alsoStageCSS: commit && !!hasStyleChanges,
           }),
         });
+        const ct = resp.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          throw new Error("Server returned HTML instead of JSON — restart your dev server to pick up the new chisel middleware");
+        }
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || "Failed to save icon changes");
         messages.push(data.message);
