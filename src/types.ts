@@ -26,6 +26,32 @@ export interface MiddlewareOptions {
   apiPrefix?: string;
 }
 
+export type IconLibrary = "lucide" | "fontawesome" | "material" | "unknown";
+
+export interface DetectedIcon {
+  /** Icon library identifier */
+  library: IconLibrary;
+  /** Kebab-case icon name, e.g. "zap", "arrow-right" */
+  iconName: string;
+  /** PascalCase component name, e.g. "Zap", "ArrowRight" */
+  componentName: string;
+  /** The SVG element on the page */
+  element: SVGSVGElement;
+  /** Import source, e.g. "lucide-react", "@fortawesome/free-solid-svg-icons" */
+  importSource: string;
+}
+
+export interface IconChange {
+  /** Original component name (PascalCase) */
+  originalComponent: string;
+  /** Replacement component name (PascalCase) */
+  replacementComponent: string;
+  /** Import source for the replacement */
+  importSource: string;
+  /** Icon library */
+  library: IconLibrary;
+}
+
 export interface VarInfo {
   /** CSS variable name, e.g. "--background" */
   name: string;

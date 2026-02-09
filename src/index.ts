@@ -1,6 +1,7 @@
 export { DevPanel } from "./panel";
-export type { PanelOptions, VarGroup, VarInfo, ContentChange } from "./types";
+export type { PanelOptions, VarGroup, VarInfo, ContentChange, DetectedIcon, IconChange, IconLibrary } from "./types";
 export { hslToHex, hexToHsl, isColorValue, scanCSSVariables } from "./utils";
+export { findSVGIcon, detectIcon, kebabToPascal } from "./icons";
 
 import { DevPanel } from "./panel";
 import type { PanelOptions } from "./types";

@@ -1,5 +1,6 @@
-import type { PanelOptions, VarGroup, ContentChange } from "./types";
+import type { PanelOptions, VarGroup, ContentChange, DetectedIcon, IconChange } from "./types";
 import { hslToHex, hexToHsl, scanCSSVariables } from "./utils";
+import { findSVGIcon, detectIcon } from "./icons";
 
 // ============================================================
 // Default options
@@ -48,7 +49,7 @@ function btnStyle(bg: string): string {
 export class DevPanel {
   private options: typeof DEFAULTS & { variables?: VarGroup[] };
   private isOpen = false;
-  private activeTab: "theme" | "css" | "content" = "theme";
+  private activeTab: "theme" | "css" | "content" | "icons" = "theme";
   private overrides: Record<string, string> = {};
   private customCSS = "";
   private isPicking = false;
@@ -57,6 +58,12 @@ export class DevPanel {
   private contentChanges: ContentChange[] = [];
   private status = "";
   private saving = false;
+
+  // Icon tab state
+  private isPickingIcon = false;
+  private detectedIcon: DetectedIcon | null = null;
+  private iconReplacement = "";
+  private iconChanges: IconChange[] = [];
 
   // DOM refs
   private root: HTMLDivElement | null = null;
@@ -72,6 +79,9 @@ export class DevPanel {
   private pickMouseOver: ((e: MouseEvent) => void) | null = null;
   private pickClick: ((e: MouseEvent) => void) | null = null;
   private pickKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  private iconPickMouseOver: ((e: MouseEvent) => void) | null = null;
+  private iconPickClick: ((e: MouseEvent) => void) | null = null;
+  private iconPickKeyDown: ((e: KeyboardEvent) => void) | null = null;
 
   // Resolved variable groups (auto-detected or explicit)
   private varGroups: VarGroup[] = [];
@@ -129,6 +139,7 @@ export class DevPanel {
 
   unmount(): void {
     this.stopPicking();
+    this.stopIconPicking();
     if (this.keydownHandler) {
       window.removeEventListener("keydown", this.keydownHandler);
       this.keydownHandler = null;
@@ -155,6 +166,7 @@ export class DevPanel {
       this.buildPanel();
     } else {
       this.stopPicking();
+      this.stopIconPicking();
       if (this.panelEl) {
         this.panelEl.remove();
         this.panelEl = null;
@@ -210,6 +222,7 @@ export class DevPanel {
         <button data-chisel="tab" data-tab="theme" style="${this.tabStyle("theme")}">Theme</button>
         <button data-chisel="tab" data-tab="css" style="${this.tabStyle("css")}">CSS</button>
         <button data-chisel="tab" data-tab="content" style="${this.tabStyle("content")}">Content</button>
+        <button data-chisel="tab" data-tab="icons" style="${this.tabStyle("icons")}">Icons</button>
       </div>
       <div data-chisel="body" style="flex:1;overflow:auto;padding:12px 16px;"></div>
       <div style="padding:10px 16px;border-top:1px solid ${COLORS.border};display:flex;flex-direction:column;gap:6px;">
@@ -237,7 +250,7 @@ export class DevPanel {
       if (chiselAttr === "close") {
         this.toggle();
       } else if (chiselAttr === "tab") {
-        const tab = target.getAttribute("data-tab") as "theme" | "css" | "content";
+        const tab = target.getAttribute("data-tab") as "theme" | "css" | "content" | "icons";
         if (tab && tab !== this.activeTab) {
           this.activeTab = tab;
           this.updateTabs();
@@ -264,6 +277,35 @@ export class DevPanel {
         const idx = parseInt(chiselAttr.replace("remove-change-", ""), 10);
         if (!isNaN(idx)) {
           this.contentChanges.splice(idx, 1);
+          this.renderBody();
+        }
+      } else if (chiselAttr === "pick-icon") {
+        if (this.isPickingIcon) {
+          this.stopIconPicking();
+        } else {
+          this.detectedIcon = null;
+          this.iconReplacement = "";
+          this.startIconPicking();
+        }
+        this.renderBody();
+      } else if (chiselAttr === "apply-icon") {
+        if (this.iconReplacement.trim() && this.detectedIcon) {
+          const comp = this.iconReplacement.trim();
+          this.iconChanges.push({
+            originalComponent: this.detectedIcon.componentName,
+            replacementComponent: comp,
+            importSource: this.detectedIcon.importSource,
+            library: this.detectedIcon.library,
+          });
+          this.setStatus(`Queued: ${this.detectedIcon.componentName} → ${comp}`);
+          this.detectedIcon = null;
+          this.iconReplacement = "";
+          this.renderBody();
+        }
+      } else if (chiselAttr?.startsWith("remove-icon-change-")) {
+        const idx = parseInt(chiselAttr.replace("remove-icon-change-", ""), 10);
+        if (!isNaN(idx)) {
+          this.iconChanges.splice(idx, 1);
           this.renderBody();
         }
       }
@@ -301,6 +343,9 @@ export class DevPanel {
         break;
       case "content":
         this.renderContentTab();
+        break;
+      case "icons":
+        this.renderIconsTab();
         break;
     }
     this.attachBodyListeners();
@@ -404,6 +449,63 @@ export class DevPanel {
     this.bodyEl.innerHTML = html;
   }
 
+  // ---- Icons Tab ----
+
+  private renderIconsTab(): void {
+    if (!this.bodyEl) return;
+    let html = `
+      <div style="margin-bottom:10px;color:${COLORS.textMuted};line-height:1.5;">
+        Pick an icon on the page, type the replacement component name, then Apply. Changes rewrite imports and usage in source files.
+      </div>
+      <button data-chisel="pick-icon" style="${btnStyle(this.isPickingIcon ? COLORS.red : COLORS.border)}flex:none;width:100%;margin-bottom:12px;padding:8px;">
+        ${this.isPickingIcon ? "Cancel Picking (Esc)" : "Pick Icon"}
+      </button>
+    `;
+
+    if (this.isPickingIcon) {
+      html += `<div style="padding:8px;background:${COLORS.infoBg};border-radius:4px;margin-bottom:12px;color:${COLORS.infoText};font-size:12px;">Click any icon (SVG) on the page to select it...</div>`;
+    }
+
+    if (this.detectedIcon && !this.isPickingIcon) {
+      const disabled = !this.iconReplacement.trim() || this.iconReplacement.trim() === this.detectedIcon.componentName ? "opacity:0.5;pointer-events:none;" : "";
+      html += `
+        <div style="border:1px solid ${COLORS.border};border-radius:4px;padding:10px;margin-bottom:12px;background:${COLORS.bgSecondary};">
+          <div style="font-size:11px;color:${COLORS.textDim};margin-bottom:6px;">Detected Icon</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span style="font-size:14px;font-weight:600;color:${COLORS.text};font-family:monospace;">${this.escapeHtml(this.detectedIcon.componentName)}</span>
+            <span style="font-size:11px;color:${COLORS.textDim};background:${COLORS.bg};padding:2px 6px;border-radius:3px;">${this.detectedIcon.library}</span>
+          </div>
+          <div style="font-size:11px;color:${COLORS.textDim};margin-bottom:8px;">from "${this.escapeHtml(this.detectedIcon.importSource)}"</div>
+          <div style="font-size:11px;color:${COLORS.textDim};margin-bottom:2px;">Replacement component name:</div>
+          <input type="text" data-chisel="icon-replacement" value="${this.escapeAttr(this.iconReplacement)}" placeholder="e.g. Rocket, ArrowRight" style="width:100%;padding:6px 8px;background:${COLORS.bgSecondary};color:${COLORS.text};border:1px solid ${COLORS.border};border-radius:4px;font-size:13px;font-family:monospace;margin-bottom:8px;box-sizing:border-box;" aria-label="Replacement icon name"/>
+          <button data-chisel="apply-icon" style="${btnStyle(COLORS.blue)}flex:none;width:100%;${disabled}">Apply Change</button>
+        </div>
+      `;
+    }
+
+    if (this.iconChanges.length > 0) {
+      html += `<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:${COLORS.textDim};margin:16px 0 6px;letter-spacing:0.05em;">Pending Icon Changes (${this.iconChanges.length})</div>`;
+      this.iconChanges.forEach((change, i) => {
+        html += `
+          <div style="border:1px solid ${COLORS.border};border-radius:4px;padding:8px;margin-bottom:6px;background:${COLORS.bgSecondary};font-size:11px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span style="color:${COLORS.textDim};">${this.escapeHtml(change.library)}</span>
+              <button data-chisel="remove-icon-change-${i}" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;font-family:system-ui;padding:0 2px;" aria-label="Remove icon change ${i}">remove</button>
+            </div>
+            <div style="color:${COLORS.diffRed};font-family:monospace;word-break:break-word;">- ${this.escapeHtml(change.originalComponent)}</div>
+            <div style="color:${COLORS.diffGreen};font-family:monospace;word-break:break-word;">+ ${this.escapeHtml(change.replacementComponent)}</div>
+          </div>
+        `;
+      });
+    }
+
+    if (!this.isPickingIcon && !this.detectedIcon && this.iconChanges.length === 0) {
+      html += `<div style="color:${COLORS.textDimmer};text-align:center;padding:24px 0;">No icon changes yet. Click "Pick Icon" to start.</div>`;
+    }
+
+    this.bodyEl.innerHTML = html;
+  }
+
   // ---- Attach body-level listeners ----
 
   private attachBodyListeners(): void {
@@ -446,6 +548,20 @@ export class DevPanel {
           const same = this.editText === this.selectedEl.text;
           applyBtn.style.opacity = same ? "0.5" : "1";
           applyBtn.style.pointerEvents = same ? "none" : "auto";
+        }
+      });
+    }
+
+    // Icon replacement input
+    const iconReplacementInput = this.bodyEl.querySelector<HTMLInputElement>('[data-chisel="icon-replacement"]');
+    const applyIconBtn = this.bodyEl.querySelector<HTMLButtonElement>('[data-chisel="apply-icon"]');
+    if (iconReplacementInput) {
+      iconReplacementInput.addEventListener("input", () => {
+        this.iconReplacement = iconReplacementInput.value;
+        if (applyIconBtn && this.detectedIcon) {
+          const empty = !this.iconReplacement.trim() || this.iconReplacement.trim() === this.detectedIcon.componentName;
+          applyIconBtn.style.opacity = empty ? "0.5" : "1";
+          applyIconBtn.style.pointerEvents = empty ? "none" : "auto";
         }
       });
     }
@@ -564,6 +680,97 @@ export class DevPanel {
     }
   }
 
+  // ---- Icon picker ----
+
+  private startIconPicking(): void {
+    this.isPickingIcon = true;
+
+    const clearHighlight = () => {
+      if (this.highlightedEl) {
+        this.highlightedEl.style.outline = "";
+        this.highlightedEl.style.outlineOffset = "";
+        this.highlightedEl = null;
+      }
+    };
+
+    this.iconPickMouseOver = (e: MouseEvent) => {
+      const el = e.target as Element;
+      if ((el as HTMLElement).closest?.("[data-chisel]")) return;
+      const svg = findSVGIcon(el);
+      if (!svg) return;
+      clearHighlight();
+      svg.style.outline = "2px solid #60a5fa";
+      svg.style.outlineOffset = "2px";
+      this.highlightedEl = svg as unknown as HTMLElement;
+    };
+
+    this.iconPickClick = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const el = e.target as Element;
+      if ((el as HTMLElement).closest?.("[data-chisel]")) return;
+      const svg = findSVGIcon(el);
+      if (!svg) {
+        this.setStatus("No SVG icon found at click target");
+        return;
+      }
+      clearHighlight();
+      const detected = detectIcon(svg);
+      if (!detected) {
+        this.setStatus("Could not identify icon library (supported: Lucide, FontAwesome, Material)");
+        this.isPickingIcon = false;
+        this.removeIconPickListeners();
+        this.renderBody();
+        return;
+      }
+      this.detectedIcon = detected;
+      this.iconReplacement = "";
+      this.isPickingIcon = false;
+      this.removeIconPickListeners();
+      this.setStatus(`Detected: ${detected.componentName} (${detected.library})`);
+      this.renderBody();
+    };
+
+    this.iconPickKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        clearHighlight();
+        this.isPickingIcon = false;
+        this.removeIconPickListeners();
+        this.renderBody();
+      }
+    };
+
+    document.addEventListener("mouseover", this.iconPickMouseOver, true);
+    document.addEventListener("click", this.iconPickClick, true);
+    document.addEventListener("keydown", this.iconPickKeyDown, true);
+  }
+
+  private stopIconPicking(): void {
+    if (!this.isPickingIcon) return;
+    if (this.highlightedEl) {
+      this.highlightedEl.style.outline = "";
+      this.highlightedEl.style.outlineOffset = "";
+      this.highlightedEl = null;
+    }
+    this.isPickingIcon = false;
+    this.removeIconPickListeners();
+  }
+
+  private removeIconPickListeners(): void {
+    if (this.iconPickMouseOver) {
+      document.removeEventListener("mouseover", this.iconPickMouseOver, true);
+      this.iconPickMouseOver = null;
+    }
+    if (this.iconPickClick) {
+      document.removeEventListener("click", this.iconPickClick, true);
+      this.iconPickClick = null;
+    }
+    if (this.iconPickKeyDown) {
+      document.removeEventListener("keydown", this.iconPickKeyDown, true);
+      this.iconPickKeyDown = null;
+    }
+  }
+
   // ---- Content editing ----
 
   private applyContent(): void {
@@ -590,8 +797,9 @@ export class DevPanel {
 
     const hasStyleChanges = Object.keys(this.overrides).length > 0 || (this.customCSS && this.customCSS.trim());
     const hasContentChanges = this.contentChanges.length > 0;
+    const hasIconChanges = this.iconChanges.length > 0;
 
-    if (!hasStyleChanges && !hasContentChanges) {
+    if (!hasStyleChanges && !hasContentChanges && !hasIconChanges) {
       this.setStatus("Nothing to save");
       this.saving = false;
       this.updateSaveButtons(false);
@@ -620,13 +828,14 @@ export class DevPanel {
       }
 
       if (hasContentChanges) {
-        const url = commit ? `${prefix}/save-content?commit=true` : `${prefix}/save-content`;
+        const commitContent = commit && !hasIconChanges;
+        const url = commitContent ? `${prefix}/save-content?commit=true` : `${prefix}/save-content`;
         const resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             replacements: this.contentChanges,
-            alsoStageCSS: commit && !!hasStyleChanges,
+            alsoStageCSS: commitContent && !!hasStyleChanges,
           }),
         });
         const data = await resp.json();
@@ -635,13 +844,29 @@ export class DevPanel {
         this.contentChanges = [];
       }
 
+      if (hasIconChanges) {
+        const url = commit ? `${prefix}/save-icons?commit=true` : `${prefix}/save-icons`;
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            changes: this.iconChanges,
+            alsoStageCSS: commit && !!hasStyleChanges,
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "Failed to save icon changes");
+        messages.push(data.message);
+        this.iconChanges = [];
+      }
+
       this.setStatus(messages.join(" | "));
     } catch (err) {
       this.setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.saving = false;
       this.updateSaveButtons(false);
-      if (hasContentChanges) this.renderBody();
+      if (hasContentChanges || hasIconChanges) this.renderBody();
     }
   }
 
@@ -663,6 +888,10 @@ export class DevPanel {
     this.selectedEl = null;
     this.editText = "";
     this.stopPicking();
+    this.stopIconPicking();
+    this.detectedIcon = null;
+    this.iconReplacement = "";
+    this.iconChanges = [];
     if (this.customStyleEl) {
       this.customStyleEl.textContent = "";
     }

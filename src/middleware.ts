@@ -175,4 +175,130 @@ export function chiselMiddleware(
       res.status(500).json({ error: msg });
     }
   });
+
+  // ---- Icon save (rewrite imports and usage) ----
+
+  app.post(`${opts.apiPrefix}/save-icons`, async (req: any, res: any) => {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const { changes, alsoStageCSS } = req.body as {
+        changes: Array<{
+          originalComponent: string;
+          replacementComponent: string;
+          importSource: string;
+          library: string;
+        }>;
+        alsoStageCSS?: boolean;
+      };
+
+      if (!changes || !Array.isArray(changes) || changes.length === 0) {
+        res.status(400).json({ error: "No icon changes provided" });
+        return;
+      }
+
+      const findFiles = (dir: string, exts: string[]): string[] => {
+        const results: string[] = [];
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            results.push(...findFiles(full, exts));
+          } else if (exts.some((ext) => entry.name.endsWith(ext))) {
+            results.push(full);
+          }
+        }
+        return results;
+      };
+
+      const sourceFiles: string[] = [];
+      for (const srcDir of opts.srcDirs) {
+        const fullDir = path.join(process.cwd(), srcDir);
+        if (fs.existsSync(fullDir)) {
+          sourceFiles.push(...findFiles(fullDir, opts.extensions));
+        }
+      }
+
+      const modifiedFiles: string[] = [];
+
+      for (const { originalComponent, replacementComponent, importSource } of changes) {
+        if (!originalComponent || !replacementComponent || originalComponent === replacementComponent) continue;
+
+        for (const filePath of sourceFiles) {
+          let content = fs.readFileSync(filePath, "utf-8");
+          if (!content.includes(originalComponent)) continue;
+
+          // Rewrite named import: import { ..., Zap, ... } from "lucide-react"
+          const importRegex = new RegExp(
+            `(import\\s*\\{[^}]*?)\\b${escapeRegex(originalComponent)}\\b([^}]*}\\s*from\\s*["']${escapeRegex(importSource)}["'])`,
+            "g"
+          );
+          content = content.replace(importRegex, `$1${replacementComponent}$2`);
+
+          // Rewrite JSX usage: <Zap or <Zap> or <Zap/> or <Zap  (with props)
+          const jsxRegex = new RegExp(`<${escapeRegex(originalComponent)}(\\s|\\/>|>)`, "g");
+          content = content.replace(jsxRegex, `<${replacementComponent}$1`);
+
+          // Rewrite closing tags: </Zap>
+          const closingRegex = new RegExp(`</${escapeRegex(originalComponent)}>`, "g");
+          content = content.replace(closingRegex, `</${replacementComponent}>`);
+
+          // Rewrite object references: icon: Zap or icon={Zap}
+          const refRegex = new RegExp(`(icon\\s*[:=]\\s*\\{?)\\b${escapeRegex(originalComponent)}\\b`, "g");
+          content = content.replace(refRegex, `$1${replacementComponent}`);
+
+          fs.writeFileSync(filePath, content, "utf-8");
+          if (!modifiedFiles.includes(filePath)) {
+            modifiedFiles.push(filePath);
+          }
+        }
+      }
+
+      if (modifiedFiles.length === 0) {
+        res.json({
+          success: true,
+          message: "No matching icon usage found in source files",
+          files: [],
+        });
+        return;
+      }
+
+      const relFiles = modifiedFiles.map((f) => path.relative(process.cwd(), f));
+
+      const commit = req.query["commit"] === "true";
+      if (commit) {
+        const { execSync } = await import("child_process");
+        for (const f of relFiles) {
+          execSync(`git add "${f}"`, { cwd: process.cwd() });
+        }
+        if (alsoStageCSS) {
+          execSync(`git add "${opts.cssFile}"`, { cwd: process.cwd() });
+        }
+        const result = execSync(
+          'git commit -m "style: swap icons via chisel"',
+          { cwd: process.cwd(), encoding: "utf-8" }
+        );
+        const hashMatch = result.match(/\[[\w-]+\s+([a-f0-9]+)\]/);
+        const hash = hashMatch ? hashMatch[1] : "unknown";
+        res.json({
+          success: true,
+          message: `Committed: ${hash} (${relFiles.length} file${relFiles.length > 1 ? "s" : ""})`,
+          files: relFiles,
+        });
+      } else {
+        res.json({
+          success: true,
+          message: `Saved ${relFiles.length} file${relFiles.length > 1 ? "s" : ""}: ${relFiles.join(", ")}`,
+          files: relFiles,
+        });
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to save icon changes";
+      console.error("chisel save-icons error:", error);
+      res.status(500).json({ error: msg });
+    }
+  });
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
