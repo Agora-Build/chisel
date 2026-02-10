@@ -68,7 +68,7 @@ export class DevPanel {
 
   // Mark tab state
   private overlay: AnnotationOverlay | null = null;
-  private markTool: AnnotationTool = "circle";
+  private markTool: AnnotationTool | null = null;
   private markColor = "#ef4444";
   private markSaving = false;
   private markResult = "";
@@ -268,6 +268,10 @@ export class DevPanel {
         if (tab && tab !== this.activeTab) {
           if (this.activeTab === "mark" && this.overlay) this.overlay.hide();
           this.activeTab = tab;
+          // When returning to Mark tab with existing annotations, restore overlay
+          if (tab === "mark" && this.overlay && this.overlay.getAnnotationCount() > 0 && this.markTool) {
+            this.overlay.show(this.markTool);
+          }
           this.updateTabs();
           this.renderBody();
         }
@@ -574,6 +578,7 @@ export class DevPanel {
         <button data-chisel="tool-arrow" style="${btnStyle(this.markTool === "arrow" ? COLORS.blue : COLORS.border)}">Arrow</button>
         <button data-chisel="tool-text" style="${btnStyle(this.markTool === "text" ? COLORS.blue : COLORS.border)}">Text</button>
       </div>
+      ${!this.markTool && (!this.overlay || this.overlay.getAnnotationCount() === 0) ? `<div style="font-size:11px;color:${COLORS.textDim};margin-bottom:10px;">Select a tool to start annotating.</div>` : ""}
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:${COLORS.textDim};margin-bottom:6px;letter-spacing:0.05em;">Color</div>
       <div style="display:flex;gap:6px;margin-bottom:12px;">
     `;
