@@ -102,6 +102,9 @@ export class AnnotationOverlay {
     const chiselDisplay = chiselRoot?.style.display;
     if (chiselRoot) chiselRoot.style.display = "none";
 
+    // Neutralize oklab/oklch on the LIVE page before html2canvas reads computed styles
+    const saved = neutralizePageColors();
+
     try {
       const html2canvas = await loadHtml2Canvas();
       const canvas = await html2canvas(document.body, {
@@ -114,9 +117,6 @@ export class AnnotationOverlay {
         windowHeight: window.innerHeight,
         x: window.scrollX,
         y: window.scrollY,
-        onclone: (clonedDoc: Document) => {
-          neutralizeModernColors(clonedDoc);
-        },
       });
 
       // Draw annotations onto the canvas
@@ -146,7 +146,8 @@ export class AnnotationOverlay {
 
       return canvas.toDataURL("image/png");
     } finally {
-      // Restore visibility
+      // Restore colors first, then visibility
+      restorePageColors(saved);
       if (this.svg && overlayDisplay !== undefined) this.svg.style.display = overlayDisplay;
       if (chiselRoot && chiselDisplay !== undefined) chiselRoot.style.display = chiselDisplay;
     }
@@ -457,15 +458,21 @@ function loadHtml2Canvas(): Promise<any> {
   return html2canvasPromise;
 }
 
-// ---- Neutralize modern CSS colors (oklab, oklch) for html2canvas ----
-// html2canvas can't parse oklab/oklch. We resolve them to rgb() using
-// the browser's native color engine via a probe element, then rewrite
-// the cloned document's stylesheets before html2canvas processes them.
+// ---- Neutralize modern CSS colors on the LIVE page for html2canvas ----
+// html2canvas reads computed styles from the original document during cloning
+// (before onclone fires), so we must modify the live page's stylesheets.
+// We replace oklab()/oklch() with browser-resolved rgb() values, capture,
+// then restore the original stylesheet text.
 
-const MODERN_COLOR_RE = /(?:oklab|oklch)\([^)]+\)/gi;
+interface SavedStyles {
+  entries: Array<{ el: HTMLStyleElement; original: string }>;
+}
 
-function neutralizeModernColors(doc: Document): void {
-  // Build a resolution cache: oklch(...) → rgb(...)
+function neutralizePageColors(): SavedStyles {
+  const saved: SavedStyles = { entries: [] };
+  const re = /(?:oklab|oklch)\([^)]*\)/gi;
+
+  // Build color resolution cache using a probe element
   const cache = new Map<string, string>();
   const probe = document.createElement("div");
   probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;";
@@ -486,24 +493,24 @@ function neutralizeModernColors(doc: Document): void {
     }
   };
 
-  // Rewrite <style> elements in the clone
-  doc.querySelectorAll("style").forEach((style) => {
-    if (style.textContent && MODERN_COLOR_RE.test(style.textContent)) {
-      MODERN_COLOR_RE.lastIndex = 0;
-      style.textContent = style.textContent.replace(MODERN_COLOR_RE, resolve);
-    }
-  });
-
-  // Rewrite inline styles
-  doc.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
-    const s = el.getAttribute("style") || "";
-    if (MODERN_COLOR_RE.test(s)) {
-      MODERN_COLOR_RE.lastIndex = 0;
-      el.setAttribute("style", s.replace(MODERN_COLOR_RE, resolve));
+  // Rewrite all <style> elements on the live page
+  document.querySelectorAll("style").forEach((style) => {
+    const text = style.textContent || "";
+    if (re.test(text)) {
+      re.lastIndex = 0;
+      saved.entries.push({ el: style as HTMLStyleElement, original: text });
+      style.textContent = text.replace(re, resolve);
     }
   });
 
   probe.remove();
+  return saved;
+}
+
+function restorePageColors(saved: SavedStyles): void {
+  for (const { el, original } of saved.entries) {
+    el.textContent = original;
+  }
 }
 
 // ---- Canvas arrow helper ----

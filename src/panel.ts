@@ -239,7 +239,7 @@ export class DevPanel {
         <button data-chisel="tab" data-tab="mark" style="${this.tabStyle("mark")}">Mark</button>
       </div>
       <div data-chisel="body" style="flex:1;overflow:auto;padding:12px 16px;"></div>
-      <div style="padding:10px 16px;border-top:1px solid ${COLORS.border};display:flex;flex-direction:column;gap:6px;">
+      <div data-chisel="footer" style="padding:10px 16px;border-top:1px solid ${COLORS.border};display:flex;flex-direction:column;gap:6px;${this.activeTab === "mark" ? "display:none;" : ""}">
         <div style="display:flex;gap:6px;">
           <button data-chisel="save" style="${btnStyle(COLORS.blue)}">Save to File</button>
           <button data-chisel="save-commit" style="${btnStyle(COLORS.green)}">Save &amp; Commit</button>
@@ -372,6 +372,9 @@ export class DevPanel {
       const tabName = (t as HTMLElement).getAttribute("data-tab") || "";
       (t as HTMLElement).style.cssText = this.tabStyle(tabName);
     });
+    // Hide save/commit footer on Mark tab
+    const footer = this.panelEl.querySelector('[data-chisel="footer"]') as HTMLElement | null;
+    if (footer) footer.style.display = this.activeTab === "mark" ? "none" : "flex";
   }
 
   // ---- Render body content ----
