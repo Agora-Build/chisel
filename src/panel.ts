@@ -654,6 +654,7 @@ export class DevPanel {
       this.markResult = `Task saved: ${data.taskFile}${data.forwarded ? " (forwarded to Astation)" : ""}`;
       this.overlay.clear();
       this.overlay.hide();
+      this.markTool = null;
     } catch (err) {
       this.markResult = `Error: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
