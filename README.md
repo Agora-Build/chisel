@@ -1,16 +1,18 @@
 # @agora-build/chisel-dev
 
-Framework-agnostic dev style panel for live CSS variable editing, custom CSS injection, and content editing. Works with React, Vue, Svelte, or vanilla HTML.
+Framework-agnostic dev panel for live CSS variable editing, custom CSS injection, content editing, and visual annotation. Works with React, Vue, Svelte, or vanilla HTML.
 
 ## Features
 
-- **Theme editor** — auto-detects CSS custom properties from your stylesheets, with color pickers and text inputs
-- **CSS editor** — inject arbitrary CSS, applied instantly
-- **Content editor** — pick any text element on the page, edit it, apply the change
-- **Save to file** — writes changes back to your source files (CSS variables and text content)
-- **Save & commit** — saves and creates a git commit in one click
-- **Persistent** — overrides survive page refresh via localStorage
-- **Zero runtime deps** — vanilla JS core, optional React wrapper
+- **Theme editor** -- auto-detects CSS custom properties from your stylesheets, with color pickers and text inputs
+- **CSS editor** -- inject arbitrary CSS, applied instantly
+- **Content editor** -- pick any text element on the page, edit it, apply the change
+- **Icons tab** -- pick SVG icons, detect library (Lucide/FontAwesome/Material), rewrite source files
+- **Mark tab** -- draw annotations on a page screenshot and send them to an AI agent for implementation
+- **Save to file** -- writes changes back to your source files (CSS variables and text content)
+- **Save & commit** -- saves and creates a git commit in one click
+- **Persistent** -- overrides survive page refresh via localStorage
+- **Zero runtime deps** -- vanilla JS core, optional React wrapper
 
 ## Install
 
@@ -43,7 +45,7 @@ function App() {
 }
 ```
 
-### Express Middleware (for save-to-file)
+### Express Middleware (for save-to-file + mark tasks)
 
 ```ts
 import express from "express";
@@ -59,6 +61,20 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 ```
+
+### With Astation (for AI agent routing)
+
+```ts
+chiselMiddleware(app, {
+  cssFile: "src/index.css",
+  srcDirs: ["src"],
+  astation: {
+    wsUrl: "ws://astation-host:8080/ws",
+  },
+});
+```
+
+When `astation` is configured, clicking "Ask Agent to Work on It" in the Mark tab saves the annotated screenshot and task data to `.chisel/tasks/`, then notifies [Astation](https://github.com/Agora-Build/Astation) which routes the task to an [Atem](https://github.com/Agora-Build/Atem) instance running Claude Code.
 
 ## API
 
@@ -76,12 +92,14 @@ React component wrapper. Mounts on render, unmounts on cleanup. Accepts all `Pan
 
 ### `chiselMiddleware(app, options?)`
 
-Register save routes on an Express app or router. Adds two POST endpoints:
+Register save routes on an Express app or router. Adds these POST endpoints:
 
-- `POST {apiPrefix}/save-styles` — update CSS variables in source file
-- `POST {apiPrefix}/save-content` — find-and-replace text in source files
+- `POST {apiPrefix}/save-styles` -- update CSS variables in source file
+- `POST {apiPrefix}/save-content` -- find-and-replace text in source files
+- `POST {apiPrefix}/save-icons` -- replace icon imports in source files
+- `POST {apiPrefix}/save-mark` -- save annotated screenshot + task JSON, optionally notify Astation
 
-Both accept `?commit=true` query param to auto-commit.
+`save-styles` and `save-content` accept `?commit=true` query param to auto-commit.
 
 ## Options
 
@@ -101,10 +119,17 @@ Both accept `?commit=true` query param to auto-commit.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `cssFile` | `string` | `"src/index.css"` | Path to the CSS file to edit |
-| `srcDirs` | `string[]` | `["src"]` | Directories to search for content replacements |
+| `srcDirs` | `string[]` | `["src"]` | Directories to search for content/icon replacements |
 | `extensions` | `string[]` | `[".tsx", ".ts", ".jsx", ".js", ".vue", ".svelte"]` | File extensions to search |
 | `commitMessage` | `string` | `"style: update theme variables via chisel"` | Git commit message |
 | `apiPrefix` | `string` | `"/api/dev"` | API route prefix |
+| `astation` | `AstationConfig` | -- | Astation hub connection (enables mark task routing) |
+
+### AstationConfig
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `wsUrl` | `string` | WebSocket URL for Astation hub, e.g. `"ws://astation-host:8080/ws"` |
 
 ## How It Works
 
@@ -114,7 +139,29 @@ Both accept `?commit=true` query param to auto-commit.
 
 **Content tab**: Uses `document.addEventListener("click", ..., true)` in capture phase to intercept clicks during pick mode. Stores original/replacement pairs and sends them to the middleware for find-and-replace in source files.
 
+**Icons tab**: Pick SVG icons from the page, detect their library (Lucide, FontAwesome, Material), type a replacement name, and rewrite the import in source files.
+
+**Mark tab**: Takes a screenshot of the page, overlays drawing tools (arrow, rectangle, text, freehand), and lets you annotate areas that need changes. Clicking "Ask Agent to Work on It" saves the annotated screenshot and task data to `.chisel/tasks/` on the server. If Astation is configured, a lightweight notification (task ID + description) is sent via WebSocket to route the task to an AI agent.
+
 **Save**: The middleware receives variable overrides and does regex replacement in the CSS file (`--name: oldvalue;` -> `--name: newvalue;`). Content changes are string-replaced across all files in the configured source directories.
+
+## Mark Task Flow
+
+```
+Browser (Chisel Dev panel)
+  ↓ User draws annotations, clicks "Ask Agent to Work on It"
+  ↓ POST /api/dev/save-mark
+Express middleware
+  ↓ Saves .chisel/tasks/{taskId}.json + .png
+  ↓ WS markTaskNotify → Astation (if configured)
+Astation hub
+  ↓ Routes markTaskAssignment → best Atem instance
+Atem
+  ↓ Reads task from local .chisel/tasks/
+  ↓ Builds prompt from annotations + screenshot
+  ↓ Sends to Claude Code
+  ↓ WS markTaskResult → Astation
+```
 
 ## Entry Points
 
@@ -123,6 +170,12 @@ Both accept `?commit=true` query param to auto-commit.
 | `@agora-build/chisel-dev` | Client: `mountPanel()`, `DevPanel`, utilities |
 | `@agora-build/chisel-dev/middleware` | Server: `chiselMiddleware()` |
 | `@agora-build/chisel-dev/react` | React: `<ChiselPanel />` |
+
+## Related Projects
+
+- [Astation](https://github.com/Agora-Build/Astation) -- macOS menubar hub for task routing
+- [Atem](https://github.com/Agora-Build/Atem) -- AI development terminal (receives tasks)
+- [Vox](https://github.com/Agora-Build/Vox) -- AI latency evaluation platform
 
 ## License
 
