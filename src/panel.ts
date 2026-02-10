@@ -176,6 +176,10 @@ export class DevPanel {
     this.isOpen = !this.isOpen;
     if (this.isOpen) {
       this.buildPanel();
+      // Restore overlay if Mark tab is active with annotations
+      if (this.activeTab === "mark" && this.overlay && this.overlay.getAnnotationCount() > 0 && this.markTool) {
+        this.overlay.show(this.markTool);
+      }
     } else {
       this.stopPicking();
       this.stopIconPicking();
