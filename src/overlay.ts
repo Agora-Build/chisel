@@ -102,9 +102,6 @@ export class AnnotationOverlay {
     const chiselDisplay = chiselRoot?.style.display;
     if (chiselRoot) chiselRoot.style.display = "none";
 
-    // Neutralize oklab/oklch on the LIVE page before html2canvas reads computed styles
-    const saved = neutralizePageColors();
-
     try {
       const html2canvas = await loadHtml2Canvas();
       const canvas = await html2canvas(document.body, {
@@ -146,8 +143,6 @@ export class AnnotationOverlay {
 
       return canvas.toDataURL("image/png");
     } finally {
-      // Restore colors first, then visibility
-      restorePageColors(saved);
       if (this.svg && overlayDisplay !== undefined) this.svg.style.display = overlayDisplay;
       if (chiselRoot && chiselDisplay !== undefined) chiselRoot.style.display = chiselDisplay;
     }
@@ -435,7 +430,9 @@ export class AnnotationOverlay {
   }
 }
 
-// ---- html2canvas lazy loader ----
+// ---- html2canvas-pro lazy loader ----
+// html2canvas-pro is a drop-in replacement that natively supports
+// modern CSS color functions (oklch, oklab, lab, lch, color-mix).
 
 let html2canvasPromise: Promise<any> | null = null;
 
@@ -447,70 +444,15 @@ function loadHtml2Canvas(): Promise<any> {
       return;
     }
     const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    script.src = "https://cdn.jsdelivr.net/npm/html2canvas-pro@1.6.6/dist/html2canvas-pro.min.js";
     script.onload = () => resolve((window as any).html2canvas);
     script.onerror = () => {
       html2canvasPromise = null;
-      reject(new Error("Failed to load html2canvas from CDN"));
+      reject(new Error("Failed to load html2canvas-pro from CDN"));
     };
     document.head.appendChild(script);
   });
   return html2canvasPromise;
-}
-
-// ---- Neutralize modern CSS colors on the LIVE page for html2canvas ----
-// html2canvas reads computed styles from the original document during cloning
-// (before onclone fires), so we must modify the live page's stylesheets.
-// We replace oklab()/oklch() with browser-resolved rgb() values, capture,
-// then restore the original stylesheet text.
-
-interface SavedStyles {
-  entries: Array<{ el: HTMLStyleElement; original: string }>;
-}
-
-function neutralizePageColors(): SavedStyles {
-  const saved: SavedStyles = { entries: [] };
-  const re = /(?:oklab|oklch)\([^)]*\)/gi;
-
-  // Build color resolution cache using a probe element
-  const cache = new Map<string, string>();
-  const probe = document.createElement("div");
-  probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;";
-  document.body.appendChild(probe);
-
-  const resolve = (match: string): string => {
-    const cached = cache.get(match);
-    if (cached) return cached;
-    try {
-      probe.style.color = match;
-      const rgb = getComputedStyle(probe).color;
-      probe.style.color = "";
-      cache.set(match, rgb);
-      return rgb;
-    } catch {
-      cache.set(match, "#808080");
-      return "#808080";
-    }
-  };
-
-  // Rewrite all <style> elements on the live page
-  document.querySelectorAll("style").forEach((style) => {
-    const text = style.textContent || "";
-    if (re.test(text)) {
-      re.lastIndex = 0;
-      saved.entries.push({ el: style as HTMLStyleElement, original: text });
-      style.textContent = text.replace(re, resolve);
-    }
-  });
-
-  probe.remove();
-  return saved;
-}
-
-function restorePageColors(saved: SavedStyles): void {
-  for (const { el, original } of saved.entries) {
-    el.textContent = original;
-  }
 }
 
 // ---- Canvas arrow helper ----
