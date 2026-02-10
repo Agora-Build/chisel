@@ -1,5 +1,6 @@
 export { DevPanel } from "./panel";
-export type { PanelOptions, VarGroup, VarInfo, ContentChange, DetectedIcon, IconChange, IconLibrary } from "./types";
+export { AnnotationOverlay } from "./overlay";
+export type { PanelOptions, VarGroup, VarInfo, ContentChange, DetectedIcon, IconChange, IconLibrary, Annotation, AnnotationTool, MarkSnapshot, AstationConfig } from "./types";
 export { hslToHex, hexToHsl, isColorValue, scanCSSVariables } from "./utils";
 export { findSVGIcon, detectIcon, kebabToPascal } from "./icons";
 

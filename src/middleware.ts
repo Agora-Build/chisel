@@ -1,9 +1,10 @@
-import type { MiddlewareOptions } from "./types";
+import type { MiddlewareOptions, AstationConfig } from "./types";
 
-export type { MiddlewareOptions } from "./types";
+export type { MiddlewareOptions, AstationConfig } from "./types";
 
 /** Minimal interface matching Express app or Router — avoids cross-package type conflicts. */
 interface AppLike {
+  get(path: string, handler: (req: any, res: any) => void): void;
   post(path: string, handler: (req: any, res: any) => void): void;
 }
 
@@ -13,7 +14,7 @@ const DEFAULTS = {
   extensions: [".tsx", ".ts", ".jsx", ".js", ".vue", ".svelte"],
   commitMessage: "style: update theme variables via chisel",
   apiPrefix: "/api/dev",
-} satisfies Required<MiddlewareOptions>;
+} satisfies Required<Omit<MiddlewareOptions, "astation">>;
 
 /**
  * Register chisel dev routes on the given Express app or router.
@@ -302,6 +303,191 @@ export function chiselMiddleware(
       console.error("chisel save-icons error:", error);
       res.status(500).json({ error: msg });
     }
+  });
+
+  // ---- Mark & Snapshot endpoints ----
+
+  app.post(`${opts.apiPrefix}/save-mark`, async (req: any, res: any) => {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const { url, title, viewport, timestamp, screenshotDataUrl, annotations } = req.body as {
+        url: string;
+        title: string;
+        viewport: { width: number; height: number };
+        timestamp: string;
+        screenshotDataUrl: string;
+        annotations: any[];
+      };
+
+      if (!screenshotDataUrl || !annotations) {
+        res.status(400).json({ error: "Missing screenshot or annotations" });
+        return;
+      }
+
+      // Generate task ID
+      const ts = Date.now();
+      const suffix = Math.random().toString(36).slice(2, 8);
+      const taskId = `mark_${ts}_${suffix}`;
+
+      // Ensure .chisel/tasks/ directory exists
+      const tasksDir = path.join(process.cwd(), ".chisel", "tasks");
+      fs.mkdirSync(tasksDir, { recursive: true });
+
+      // Save screenshot PNG
+      const pngPath = path.join(tasksDir, `${taskId}.png`);
+      const base64Data = screenshotDataUrl.replace(/^data:image\/png;base64,/, "");
+      fs.writeFileSync(pngPath, Buffer.from(base64Data, "base64"));
+
+      // Collect source files from srcDirs
+      const findFiles = (dir: string, exts: string[]): string[] => {
+        const results: string[] = [];
+        if (!fs.existsSync(dir)) return results;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            results.push(...findFiles(full, exts));
+          } else if (exts.some((ext: string) => entry.name.endsWith(ext))) {
+            results.push(path.relative(process.cwd(), full));
+          }
+        }
+        return results;
+      };
+
+      const sourceFiles: string[] = [];
+      for (const srcDir of opts.srcDirs) {
+        const fullDir = path.join(process.cwd(), srcDir);
+        sourceFiles.push(...findFiles(fullDir, opts.extensions));
+      }
+
+      // Build task JSON
+      const relScreenshot = path.join(".chisel", "tasks", `${taskId}.png`);
+      const task = {
+        id: taskId,
+        timestamp: timestamp || new Date().toISOString(),
+        url,
+        title,
+        viewport,
+        screenshot: relScreenshot,
+        annotations,
+        status: "pending",
+        sourceFiles,
+      };
+
+      const taskFile = path.join(".chisel", "tasks", `${taskId}.json`);
+      const taskFileFull = path.join(process.cwd(), taskFile);
+      fs.writeFileSync(taskFileFull, JSON.stringify(task, null, 2), "utf-8");
+
+      // Optionally forward to Astation
+      let forwarded = false;
+      if (opts.astation) {
+        try {
+          forwarded = await forwardToAstation(opts.astation, taskId, task, pngPath);
+        } catch (err) {
+          console.error("chisel: failed to forward to Astation:", err);
+        }
+      }
+
+      res.json({ ok: true, taskId, taskFile, forwarded });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to save mark";
+      console.error("chisel save-mark error:", error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get(`${opts.apiPrefix}/tasks`, async (_req: any, res: any) => {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const tasksDir = path.join(process.cwd(), ".chisel", "tasks");
+
+      if (!fs.existsSync(tasksDir)) {
+        res.json({ tasks: [] });
+        return;
+      }
+
+      const files = fs.readdirSync(tasksDir).filter((f: string) => f.endsWith(".json"));
+      const tasks = files.map((f: string) => {
+        const content = fs.readFileSync(path.join(tasksDir, f), "utf-8");
+        return JSON.parse(content);
+      });
+
+      // Sort by timestamp descending (newest first)
+      tasks.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      res.json({ tasks });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to list tasks";
+      console.error("chisel tasks error:", error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.post(`${opts.apiPrefix}/tasks/:id/complete`, async (req: any, res: any) => {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const taskId = req.params.id;
+      const taskFile = path.join(process.cwd(), ".chisel", "tasks", `${taskId}.json`);
+
+      if (!fs.existsSync(taskFile)) {
+        res.status(404).json({ error: "Task not found" });
+        return;
+      }
+
+      const task = JSON.parse(fs.readFileSync(taskFile, "utf-8"));
+      task.status = "completed";
+      task.completedAt = new Date().toISOString();
+      fs.writeFileSync(taskFile, JSON.stringify(task, null, 2), "utf-8");
+
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to complete task";
+      console.error("chisel task complete error:", error);
+      res.status(500).json({ error: msg });
+    }
+  });
+}
+
+async function forwardToAstation(
+  astation: AstationConfig,
+  taskId: string,
+  task: any,
+  pngPath: string,
+): Promise<boolean> {
+  const fs = await import("fs");
+
+  // 1. Upload screenshot via HTTP
+  const imageData = fs.readFileSync(pngPath);
+  const uploadResp = await fetch(`${astation.httpUrl}/api/images`, {
+    method: "POST",
+    headers: { "Content-Type": "image/png" },
+    body: imageData,
+  });
+  if (!uploadResp.ok) throw new Error(`Image upload failed: ${uploadResp.status}`);
+  const { imageUrl } = (await uploadResp.json()) as { imageUrl: string };
+
+  // 2. Send task metadata via WebSocket
+  // Dynamic import — ws is an optional peer dep, only needed when astation is configured
+  const { WebSocket } = (await import(/* webpackIgnore: true */ "ws" as any)) as { WebSocket: any };
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(astation.wsUrl);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: "markTaskRequest",
+        taskId,
+        annotations: task.annotations,
+        imageUrl,
+        pageUrl: task.url,
+        sourceFiles: task.sourceFiles,
+      }));
+      ws.close();
+      resolve(true);
+    };
+    ws.onerror = (err: any) => {
+      reject(err);
+    };
   });
 }
 

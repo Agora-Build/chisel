@@ -1,6 +1,7 @@
-import type { PanelOptions, VarGroup, ContentChange, DetectedIcon, IconChange } from "./types";
+import type { PanelOptions, VarGroup, ContentChange, DetectedIcon, IconChange, AnnotationTool, MarkSnapshot } from "./types";
 import { hslToHex, hexToHsl, scanCSSVariables } from "./utils";
 import { findSVGIcon, detectIcon } from "./icons";
+import { AnnotationOverlay } from "./overlay";
 
 // ============================================================
 // Default options
@@ -49,7 +50,7 @@ function btnStyle(bg: string): string {
 export class DevPanel {
   private options: typeof DEFAULTS & { variables?: VarGroup[] };
   private isOpen = false;
-  private activeTab: "theme" | "css" | "content" | "icons" = "theme";
+  private activeTab: "theme" | "css" | "content" | "icons" | "mark" = "theme";
   private overrides: Record<string, string> = {};
   private customCSS = "";
   private isPicking = false;
@@ -64,6 +65,13 @@ export class DevPanel {
   private detectedIcon: DetectedIcon | null = null;
   private iconReplacement = "";
   private iconChanges: IconChange[] = [];
+
+  // Mark tab state
+  private overlay: AnnotationOverlay | null = null;
+  private markTool: AnnotationTool = "circle";
+  private markColor = "#ef4444";
+  private markSaving = false;
+  private markResult = "";
 
   // DOM refs
   private root: HTMLDivElement | null = null;
@@ -140,6 +148,10 @@ export class DevPanel {
   unmount(): void {
     this.stopPicking();
     this.stopIconPicking();
+    if (this.overlay) {
+      this.overlay.destroy();
+      this.overlay = null;
+    }
     if (this.keydownHandler) {
       window.removeEventListener("keydown", this.keydownHandler);
       this.keydownHandler = null;
@@ -167,6 +179,7 @@ export class DevPanel {
     } else {
       this.stopPicking();
       this.stopIconPicking();
+      if (this.overlay) this.overlay.hide();
       if (this.panelEl) {
         this.panelEl.remove();
         this.panelEl = null;
@@ -223,6 +236,7 @@ export class DevPanel {
         <button data-chisel="tab" data-tab="css" style="${this.tabStyle("css")}">CSS</button>
         <button data-chisel="tab" data-tab="content" style="${this.tabStyle("content")}">Content</button>
         <button data-chisel="tab" data-tab="icons" style="${this.tabStyle("icons")}">Icons</button>
+        <button data-chisel="tab" data-tab="mark" style="${this.tabStyle("mark")}">Mark</button>
       </div>
       <div data-chisel="body" style="flex:1;overflow:auto;padding:12px 16px;"></div>
       <div style="padding:10px 16px;border-top:1px solid ${COLORS.border};display:flex;flex-direction:column;gap:6px;">
@@ -250,8 +264,9 @@ export class DevPanel {
       if (chiselAttr === "close") {
         this.toggle();
       } else if (chiselAttr === "tab") {
-        const tab = target.getAttribute("data-tab") as "theme" | "css" | "content" | "icons";
+        const tab = target.getAttribute("data-tab") as "theme" | "css" | "content" | "icons" | "mark";
         if (tab && tab !== this.activeTab) {
+          if (this.activeTab === "mark" && this.overlay) this.overlay.hide();
           this.activeTab = tab;
           this.updateTabs();
           this.renderBody();
@@ -313,6 +328,30 @@ export class DevPanel {
           this.iconChanges.splice(idx, 1);
           this.renderBody();
         }
+      } else if (chiselAttr === "tool-circle" || chiselAttr === "tool-arrow" || chiselAttr === "tool-text") {
+        const tool = chiselAttr.replace("tool-", "") as AnnotationTool;
+        this.markTool = tool;
+        if (!this.overlay) this.overlay = new AnnotationOverlay();
+        this.overlay.setColor(this.markColor);
+        this.overlay.show(tool);
+        this.renderBody();
+      } else if (chiselAttr?.startsWith("color-")) {
+        const color = "#" + chiselAttr.replace("color-", "");
+        this.markColor = color;
+        if (this.overlay) this.overlay.setColor(color);
+        this.renderBody();
+      } else if (chiselAttr === "mark-undo") {
+        if (this.overlay) {
+          this.overlay.undo();
+          this.renderBody();
+        }
+      } else if (chiselAttr === "mark-clear") {
+        if (this.overlay) {
+          this.overlay.clear();
+          this.renderBody();
+        }
+      } else if (chiselAttr === "ask-agent") {
+        this.handleAskAgent();
       }
     });
 
@@ -351,6 +390,9 @@ export class DevPanel {
         break;
       case "icons":
         this.renderIconsTab();
+        break;
+      case "mark":
+        this.renderMarkTab();
         break;
     }
     this.attachBodyListeners();
@@ -509,6 +551,107 @@ export class DevPanel {
     }
 
     this.bodyEl.innerHTML = html;
+  }
+
+  // ---- Mark Tab ----
+
+  private renderMarkTab(): void {
+    if (!this.bodyEl) return;
+    const MARK_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6", "#8b5cf6"];
+    const annotations = this.overlay ? this.overlay.getAnnotations() : [];
+    const count = annotations.length;
+
+    let html = `
+      <div style="margin-bottom:10px;color:${COLORS.textMuted};line-height:1.5;">
+        Draw annotations on the page, then ask an agent to work on it.
+      </div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:${COLORS.textDim};margin-bottom:6px;letter-spacing:0.05em;">Tools</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button data-chisel="tool-circle" style="${btnStyle(this.markTool === "circle" ? COLORS.blue : COLORS.border)}">Circle</button>
+        <button data-chisel="tool-arrow" style="${btnStyle(this.markTool === "arrow" ? COLORS.blue : COLORS.border)}">Arrow</button>
+        <button data-chisel="tool-text" style="${btnStyle(this.markTool === "text" ? COLORS.blue : COLORS.border)}">Text</button>
+      </div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:${COLORS.textDim};margin-bottom:6px;letter-spacing:0.05em;">Color</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+    `;
+    for (const c of MARK_COLORS) {
+      const selected = c === this.markColor;
+      html += `<button data-chisel="color-${c.replace("#", "")}" style="width:24px;height:24px;border-radius:50%;background:${c};border:2px solid ${selected ? "#fff" : "transparent"};cursor:pointer;padding:0;" aria-label="Color ${c}"></button>`;
+    }
+    html += `</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+        <button data-chisel="mark-undo" style="${btnStyle(COLORS.border)}">Undo</button>
+        <button data-chisel="mark-clear" style="${btnStyle(COLORS.border)}">Clear</button>
+      </div>
+    `;
+
+    if (count > 0) {
+      html += `<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:${COLORS.textDim};margin:8px 0 6px;letter-spacing:0.05em;">Annotations (${count})</div>`;
+      for (const ann of annotations) {
+        let desc = "";
+        if (ann.tool === "circle") desc = `Circle at (${Math.round(ann.x)}, ${Math.round(ann.y)})`;
+        else if (ann.tool === "arrow") desc = `Arrow (${Math.round(ann.x)},${Math.round(ann.y)}) → (${Math.round(ann.endX || 0)},${Math.round(ann.endY || 0)})`;
+        else if (ann.tool === "text") desc = `Text: "${this.escapeHtml(ann.text || "")}"`;
+        html += `<div style="font-size:11px;color:${COLORS.textMuted};padding:2px 0;display:flex;align-items:center;gap:6px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${ann.color};flex-shrink:0;"></span>
+          ${desc}
+        </div>`;
+      }
+    }
+
+    if (this.markSaving) {
+      html += `<div style="margin-top:16px;padding:12px;background:${COLORS.infoBg};border-radius:4px;color:${COLORS.infoText};font-size:12px;text-align:center;">Capturing screenshot...</div>`;
+    } else if (this.markResult) {
+      html += `<div style="margin-top:16px;padding:12px;background:#0a3622;border-radius:4px;color:#4ade80;font-size:12px;">${this.escapeHtml(this.markResult)}</div>`;
+    }
+
+    html += `
+      <button data-chisel="ask-agent" style="${btnStyle(COLORS.green)}flex:none;width:100%;margin-top:16px;padding:10px;font-size:13px;${this.markSaving || count === 0 ? "opacity:0.5;pointer-events:none;" : ""}">
+        Ask Agent to Work on It
+      </button>
+    `;
+
+    this.bodyEl.innerHTML = html;
+  }
+
+  private async handleAskAgent(): Promise<void> {
+    if (this.markSaving || !this.overlay || this.overlay.getAnnotationCount() === 0) return;
+
+    this.markSaving = true;
+    this.markResult = "";
+    this.renderBody();
+
+    try {
+      const screenshotDataUrl = await this.overlay.captureScreenshot();
+      const annotations = this.overlay.getAnnotations();
+
+      const snapshot: MarkSnapshot = {
+        url: window.location.href,
+        title: document.title,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        timestamp: new Date().toISOString(),
+        screenshotDataUrl,
+        annotations,
+      };
+
+      const resp = await fetch(`${this.options.apiPrefix}/save-mark`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshot),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Failed to save mark");
+
+      this.markResult = `Task saved: ${data.taskFile}${data.forwarded ? " (forwarded to Astation)" : ""}`;
+      this.overlay.clear();
+      this.overlay.hide();
+    } catch (err) {
+      this.markResult = `Error: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      this.markSaving = false;
+      this.renderBody();
+    }
   }
 
   // ---- Attach body-level listeners ----
@@ -901,6 +1044,11 @@ export class DevPanel {
     this.detectedIcon = null;
     this.iconReplacement = "";
     this.iconChanges = [];
+    if (this.overlay) {
+      this.overlay.clear();
+      this.overlay.hide();
+    }
+    this.markResult = "";
     if (this.customStyleEl) {
       this.customStyleEl.textContent = "";
     }

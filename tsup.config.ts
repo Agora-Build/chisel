@@ -10,5 +10,5 @@ export default defineConfig({
   dts: true,
   splitting: true,
   clean: true,
-  external: ["express", "react", "fs", "path", "child_process"],
+  external: ["express", "react", "fs", "path", "child_process", "ws"],
 });

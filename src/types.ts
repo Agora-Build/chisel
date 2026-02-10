@@ -24,6 +24,8 @@ export interface MiddlewareOptions {
   commitMessage?: string;
   /** API route prefix. Default: "/api/dev" */
   apiPrefix?: string;
+  /** Optional Astation connection for forwarding tasks */
+  astation?: AstationConfig;
 }
 
 export type IconLibrary = "lucide" | "fontawesome" | "material" | "unknown";
@@ -75,4 +77,37 @@ export interface ContentChange {
   replacement: string;
   /** HTML tag name of the element */
   tagName: string;
+}
+
+// ---- Mark & Snapshot types ----
+
+export type AnnotationTool = "circle" | "arrow" | "text";
+
+export interface Annotation {
+  id: string;
+  tool: AnnotationTool;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  endX?: number;
+  endY?: number;
+  text?: string;
+  color: string;
+}
+
+export interface MarkSnapshot {
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+  timestamp: string;
+  screenshotDataUrl: string;
+  annotations: Annotation[];
+}
+
+export interface AstationConfig {
+  /** HTTP URL for image upload, e.g. "http://127.0.0.1:3000" */
+  httpUrl: string;
+  /** WebSocket URL for task messages, e.g. "ws://127.0.0.1:8080/ws" */
+  wsUrl: string;
 }
