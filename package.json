@@ -1,6 +1,6 @@
 {
   "name": "@agora-build/chisel-dev",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
   "description": "Framework-agnostic dev style panel for live CSS variable editing, custom CSS injection, and content editing",
   "license": "MIT",
@@ -47,6 +47,6 @@
     "typescript": "^5.6.3"
   },
   "dependencies": {
-    "@agora-build/chisel-dev": "^0.2.1"
+    "@agora-build/chisel-dev": "^0.2.3"
   }
 }
