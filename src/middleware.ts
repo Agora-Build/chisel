@@ -378,11 +378,12 @@ export function chiselMiddleware(
       const taskFileFull = path.join(process.cwd(), taskFile);
       fs.writeFileSync(taskFileFull, JSON.stringify(task, null, 2), "utf-8");
 
-      // Optionally forward to Astation
+      // Optionally notify Astation (lightweight: just taskId + description)
       let forwarded = false;
       if (opts.astation) {
         try {
-          forwarded = await forwardToAstation(opts.astation, taskId, task, pngPath);
+          const description = `${title || "Untitled"} (${annotations.length} annotation${annotations.length !== 1 ? "s" : ""})`;
+          forwarded = await forwardToAstation(opts.astation, taskId, description);
         } catch (err) {
           console.error("chisel: failed to forward to Astation:", err);
         }
@@ -453,34 +454,16 @@ export function chiselMiddleware(
 async function forwardToAstation(
   astation: AstationConfig,
   taskId: string,
-  task: any,
-  pngPath: string,
+  description: string,
 ): Promise<boolean> {
-  const fs = await import("fs");
-
-  // 1. Upload screenshot via HTTP
-  const imageData = fs.readFileSync(pngPath);
-  const uploadResp = await fetch(`${astation.httpUrl}/api/images`, {
-    method: "POST",
-    headers: { "Content-Type": "image/png" },
-    body: imageData,
-  });
-  if (!uploadResp.ok) throw new Error(`Image upload failed: ${uploadResp.status}`);
-  const { imageUrl } = (await uploadResp.json()) as { imageUrl: string };
-
-  // 2. Send task metadata via WebSocket
   // Dynamic import — ws is an optional peer dep, only needed when astation is configured
   const { WebSocket } = (await import(/* webpackIgnore: true */ "ws" as any)) as { WebSocket: any };
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(astation.wsUrl);
     ws.onopen = () => {
       ws.send(JSON.stringify({
-        type: "markTaskRequest",
-        taskId,
-        annotations: task.annotations,
-        imageUrl,
-        pageUrl: task.url,
-        sourceFiles: task.sourceFiles,
+        type: "markTaskNotify",
+        data: { taskId, status: "pending", description },
       }));
       ws.close();
       resolve(true);

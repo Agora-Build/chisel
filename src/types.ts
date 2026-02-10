@@ -106,8 +106,6 @@ export interface MarkSnapshot {
 }
 
 export interface AstationConfig {
-  /** HTTP URL for image upload, e.g. "http://127.0.0.1:3000" */
-  httpUrl: string;
-  /** WebSocket URL for task messages, e.g. "ws://127.0.0.1:8080/ws" */
+  /** WebSocket URL for Astation hub, e.g. "ws://astation-host:8080/ws" */
   wsUrl: string;
 }
