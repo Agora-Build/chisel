@@ -103,7 +103,48 @@ export class AnnotationOverlay {
     if (chiselRoot) chiselRoot.style.display = "none";
 
     try {
-      return await captureWithForeignObject(this.annotations);
+      const html2canvas = await loadHtml2Canvas();
+      const canvas = await html2canvas(document.body, {
+        useCORS: true,
+        allowTaint: true,
+        scale: 1,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        x: window.scrollX,
+        y: window.scrollY,
+        onclone: (clonedDoc: Document) => {
+          neutralizeModernColors(clonedDoc);
+        },
+      });
+
+      // Draw annotations onto the canvas
+      const ctx = canvas.getContext("2d")!;
+      for (const ann of this.annotations) {
+        ctx.strokeStyle = ann.color;
+        ctx.fillStyle = ann.color;
+        ctx.lineWidth = 3;
+
+        if (ann.tool === "circle" && ann.width != null && ann.height != null) {
+          const cx = ann.x + ann.width / 2;
+          const cy = ann.y + ann.height / 2;
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, Math.abs(ann.width / 2), Math.abs(ann.height / 2), 0, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (ann.tool === "arrow" && ann.endX != null && ann.endY != null) {
+          drawCanvasArrow(ctx, ann.x, ann.y, ann.endX, ann.endY, ann.color);
+        } else if (ann.tool === "text" && ann.text) {
+          ctx.font = "16px system-ui, sans-serif";
+          const metrics = ctx.measureText(ann.text);
+          ctx.fillStyle = "rgba(0,0,0,0.6)";
+          ctx.fillRect(ann.x - 4, ann.y - 2, metrics.width + 8, 22);
+          ctx.fillStyle = ann.color;
+          ctx.fillText(ann.text, ann.x, ann.y + 16);
+        }
+      }
+
+      return canvas.toDataURL("image/png");
     } finally {
       // Restore visibility
       if (this.svg && overlayDisplay !== undefined) this.svg.style.display = overlayDisplay;
@@ -393,114 +434,97 @@ export class AnnotationOverlay {
   }
 }
 
-// ---- Screenshot via SVG foreignObject ----
-// Uses the browser's native rendering engine — supports oklab(), oklch(),
-// and all modern CSS that html2canvas chokes on.
+// ---- html2canvas lazy loader ----
 
-async function captureWithForeignObject(annotations: Annotation[]): Promise<string> {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+let html2canvasPromise: Promise<any> | null = null;
 
-  // Clone the full document element
-  const clone = document.documentElement.cloneNode(true) as HTMLElement;
-
-  // Remove chisel elements from the clone
-  clone.querySelectorAll("[data-chisel]").forEach((el) => el.remove());
-
-  // Inline all stylesheets (same-origin only) so the SVG foreignObject renders correctly
-  const styles = await collectStyles();
-
-  // Scroll the clone to match current viewport
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
-
-  // Build SVG with foreignObject
-  const xmlns = "http://www.w3.org/1999/xhtml";
-  const serialized = new XMLSerializer().serializeToString(clone);
-
-  // Build annotation SVG elements
-  let annotationsSvg = "";
-  for (const ann of annotations) {
-    if (ann.tool === "circle" && ann.width != null && ann.height != null) {
-      const cx = ann.x + ann.width / 2;
-      const cy = ann.y + ann.height / 2;
-      const rx = ann.width / 2;
-      const ry = ann.height / 2;
-      annotationsSvg += `<ellipse cx="${cx}" cy="${cy}" rx="${Math.abs(rx)}" ry="${Math.abs(ry)}" fill="none" stroke="${ann.color}" stroke-width="3"/>`;
-    } else if (ann.tool === "arrow" && ann.endX != null && ann.endY != null) {
-      const angle = Math.atan2(ann.endY - ann.y, ann.endX - ann.x);
-      const headLen = 12;
-      const x2 = ann.endX, y2 = ann.endY;
-      const ax = x2 - headLen * Math.cos(angle - Math.PI / 6);
-      const ay = y2 - headLen * Math.sin(angle - Math.PI / 6);
-      const bx = x2 - headLen * Math.cos(angle + Math.PI / 6);
-      const by = y2 - headLen * Math.sin(angle + Math.PI / 6);
-      annotationsSvg += `<line x1="${ann.x}" y1="${ann.y}" x2="${x2}" y2="${y2}" stroke="${ann.color}" stroke-width="3"/>`;
-      annotationsSvg += `<polygon points="${x2},${y2} ${ax},${ay} ${bx},${by}" fill="${ann.color}"/>`;
-    } else if (ann.tool === "text" && ann.text) {
-      const escaped = ann.text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-      annotationsSvg += `<rect x="${ann.x - 4}" y="${ann.y - 2}" width="${ann.text.length * 9 + 8}" height="22" fill="rgba(0,0,0,0.6)" rx="3"/>`;
-      annotationsSvg += `<text x="${ann.x}" y="${ann.y + 16}" fill="${ann.color}" font-size="16" font-family="system-ui, sans-serif">${escaped}</text>`;
+function loadHtml2Canvas(): Promise<any> {
+  if (html2canvasPromise) return html2canvasPromise;
+  html2canvasPromise = new Promise((resolve, reject) => {
+    if ((window as any).html2canvas) {
+      resolve((window as any).html2canvas);
+      return;
     }
-  }
-
-  const svgMarkup = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-    <defs><style type="text/css">${escapeStyleForSvg(styles)}</style></defs>
-    <foreignObject width="${width}" height="${height}" x="0" y="0">
-      <div xmlns="${xmlns}" style="width:${width}px;height:${height}px;overflow:hidden;">
-        <div style="margin-top:${-scrollY}px;margin-left:${-scrollX}px;">
-          ${serialized}
-        </div>
-      </div>
-    </foreignObject>
-    ${annotationsSvg}
-  </svg>`;
-
-  const svgBlob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(svgBlob);
-
-  return new Promise<string>((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext("2d")!.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/png"));
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    script.onload = () => resolve((window as any).html2canvas);
+    script.onerror = () => {
+      html2canvasPromise = null;
+      reject(new Error("Failed to load html2canvas from CDN"));
     };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Failed to render screenshot"));
-    };
-    img.src = url;
+    document.head.appendChild(script);
   });
+  return html2canvasPromise;
 }
 
-async function collectStyles(): Promise<string> {
-  const parts: string[] = [];
-  for (const sheet of Array.from(document.styleSheets)) {
+// ---- Neutralize modern CSS colors (oklab, oklch) for html2canvas ----
+// html2canvas can't parse oklab/oklch. We resolve them to rgb() using
+// the browser's native color engine via a probe element, then rewrite
+// the cloned document's stylesheets before html2canvas processes them.
+
+const MODERN_COLOR_RE = /(?:oklab|oklch)\([^)]+\)/gi;
+
+function neutralizeModernColors(doc: Document): void {
+  // Build a resolution cache: oklch(...) → rgb(...)
+  const cache = new Map<string, string>();
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;";
+  document.body.appendChild(probe);
+
+  const resolve = (match: string): string => {
+    const cached = cache.get(match);
+    if (cached) return cached;
     try {
-      const rules = sheet.cssRules;
-      for (const rule of Array.from(rules)) {
-        parts.push(rule.cssText);
-      }
+      probe.style.color = match;
+      const rgb = getComputedStyle(probe).color;
+      probe.style.color = "";
+      cache.set(match, rgb);
+      return rgb;
     } catch {
-      // Cross-origin stylesheet — try fetching it
-      if (sheet.href) {
-        try {
-          const resp = await fetch(sheet.href);
-          if (resp.ok) parts.push(await resp.text());
-        } catch {
-          // Skip inaccessible stylesheets
-        }
-      }
+      cache.set(match, "#808080");
+      return "#808080";
     }
-  }
-  return parts.join("\n");
+  };
+
+  // Rewrite <style> elements in the clone
+  doc.querySelectorAll("style").forEach((style) => {
+    if (style.textContent && MODERN_COLOR_RE.test(style.textContent)) {
+      MODERN_COLOR_RE.lastIndex = 0;
+      style.textContent = style.textContent.replace(MODERN_COLOR_RE, resolve);
+    }
+  });
+
+  // Rewrite inline styles
+  doc.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
+    const s = el.getAttribute("style") || "";
+    if (MODERN_COLOR_RE.test(s)) {
+      MODERN_COLOR_RE.lastIndex = 0;
+      el.setAttribute("style", s.replace(MODERN_COLOR_RE, resolve));
+    }
+  });
+
+  probe.remove();
 }
 
-function escapeStyleForSvg(css: string): string {
-  // CDATA-wrap to avoid XML parsing issues with CSS special chars
-  return `<![CDATA[\n${css}\n]]>`;
+// ---- Canvas arrow helper ----
+
+function drawCanvasArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, color: string): void {
+  const headLen = 12;
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 3;
+
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
 }
