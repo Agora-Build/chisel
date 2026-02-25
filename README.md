@@ -1,6 +1,6 @@
 # @agora-build/chisel-dev
 
-Framework-agnostic dev panel for live CSS variable editing, custom CSS injection, content editing, and visual annotation. Works with React, Vue, Svelte, or vanilla HTML.
+Framework-agnostic dev panel for visual annotation and UI editing by anyone, including AI agents. Live CSS variable editing, custom CSS injection, content editing, and annotated task routing to AI coding agents. Works with React, Vue, Svelte, or vanilla HTML.
 
 ## Features
 
@@ -173,8 +173,8 @@ Atem
 
 ## Related Projects
 
-- [Astation](https://github.com/Agora-Build/Astation) -- macOS menubar hub for task routing
-- [Atem](https://github.com/Agora-Build/Atem) -- AI development terminal (receives tasks)
+- [Astation](https://github.com/Agora-Build/Astation) -- macOS menubar hub that coordinates Chisel, Atem, and AI agents — talk to your coding agent from anywhere
+- [Atem](https://github.com/Agora-Build/Atem) -- AI development terminal that connects people, Agora platform, and AI agents
 - [Vox](https://github.com/Agora-Build/Vox) -- AI latency evaluation platform
 
 ## License
