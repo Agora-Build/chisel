@@ -174,7 +174,7 @@ Atem
 ## Related Projects
 
 - [Astation](https://github.com/Agora-Build/Astation) -- macOS menubar hub that coordinates Chisel, Atem, and AI agents — talk to your coding agent from anywhere
-- [Atem](https://github.com/Agora-Build/Atem) -- AI development terminal that connects people, Agora platform, and AI agents
+- [Atem](https://github.com/Agora-Build/Atem) -- A terminal that connects people, Agora platform, and AI agents
 - [Vox](https://github.com/Agora-Build/Vox) -- AI latency evaluation platform
 
 ## License
