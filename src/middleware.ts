@@ -1,6 +1,7 @@
-import type { MiddlewareOptions, AstationConfig } from "./types";
+import type { MiddlewareOptions } from "./types";
+import { forwardMark, markPayload, screenshot } from "./station";
 
-export type { MiddlewareOptions, AstationConfig } from "./types";
+export type { MiddlewareOptions, AstationConfig, StationConfig } from "./types";
 
 /** Minimal interface matching Express app or Router — avoids cross-package type conflicts. */
 interface AppLike {
@@ -14,7 +15,7 @@ const DEFAULTS = {
   extensions: [".tsx", ".ts", ".jsx", ".js", ".vue", ".svelte"],
   commitMessage: "style: update theme variables via chisel",
   apiPrefix: "/api/dev",
-} satisfies Required<Omit<MiddlewareOptions, "astation">>;
+} satisfies Required<Omit<MiddlewareOptions, "astation" | "station">>;
 
 /**
  * Register chisel dev routes on the given Express app or router.
@@ -325,10 +326,21 @@ export function chiselMiddleware(
         return;
       }
 
+      let png: Buffer;
+      let mark: ReturnType<typeof markPayload>;
+      try {
+        png = screenshot(screenshotDataUrl);
+        mark = markPayload("validation", url, title || "", annotations, png);
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : "Invalid screenshot or annotations" });
+        return;
+      }
+
       // Generate task ID
       const ts = Date.now();
       const suffix = Math.random().toString(36).slice(2, 8);
       const taskId = `mark_${ts}_${suffix}`;
+      mark.mark_id = taskId;
 
       // Ensure .chisel/tasks/ directory exists
       const tasksDir = path.join(process.cwd(), ".chisel", "tasks");
@@ -336,8 +348,7 @@ export function chiselMiddleware(
 
       // Save screenshot PNG
       const pngPath = path.join(tasksDir, `${taskId}.png`);
-      const base64Data = screenshotDataUrl.replace(/^data:image\/png;base64,/, "");
-      fs.writeFileSync(pngPath, Buffer.from(base64Data, "base64"));
+      fs.writeFileSync(pngPath, png, { mode: 0o600 });
 
       // Collect source files from srcDirs
       const findFiles = (dir: string, exts: string[]): string[] => {
@@ -372,24 +383,39 @@ export function chiselMiddleware(
         annotations,
         status: "pending",
         sourceFiles,
+        forwarding: { event: "local", delivery: "not_published" } as Record<string, any>,
       };
 
       const taskFile = path.join(".chisel", "tasks", `${taskId}.json`);
       const taskFileFull = path.join(process.cwd(), taskFile);
-      fs.writeFileSync(taskFileFull, JSON.stringify(task, null, 2), "utf-8");
+      const saveTask = () => {
+        const temp = `${taskFileFull}.tmp`;
+        fs.writeFileSync(temp, JSON.stringify(task, null, 2), { mode: 0o600 });
+        fs.renameSync(temp, taskFileFull);
+      };
+      saveTask();
 
-      // Optionally notify Astation (lightweight: just taskId + description)
       let forwarded = false;
-      if (opts.astation) {
+      let forwardingError: string | undefined;
+      if (opts.station) {
         try {
-          const description = `${title || "Untitled"} (${annotations.length} annotation${annotations.length !== 1 ? "s" : ""})`;
-          forwarded = await forwardToAstation(opts.astation, taskId, description);
-        } catch (err) {
-          console.error("chisel: failed to forward to Astation:", err);
+          await forwardMark(opts.station, mark, png, progress => {
+            task.forwarding = { ...task.forwarding, ...progress };
+            if (progress.work?.state) task.status = progress.work.state;
+            if (progress.event === "error") task.status = progress.delivery === "accepted" ? "monitoring_lost"
+              : progress.delivery === "not_published" ? "not_sent" : "delivery_unknown";
+            saveTask();
+          });
+          forwarded = true;
+        } catch (error) {
+          forwardingError = error instanceof Error ? error.message : "Online forwarding failed";
         }
+      } else if (opts.astation) {
+        forwardingError = "Legacy Astation task-ID forwarding is unsupported; configure station for online screenshot delivery";
       }
 
-      res.json({ ok: true, taskId, taskFile, forwarded });
+      res.json({ ok: true, taskId, taskFile, forwarded, forwardingError, delivery: task.forwarding.delivery,
+        taskState: task.status });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Failed to save mark";
       console.error("chisel save-mark error:", error);
@@ -430,6 +456,10 @@ export function chiselMiddleware(
       const fs = await import("fs");
       const path = await import("path");
       const taskId = req.params.id;
+      if (!/^mark_[a-zA-Z0-9_-]+$/.test(taskId)) {
+        res.status(400).json({ error: "Invalid task ID" });
+        return;
+      }
       const taskFile = path.join(process.cwd(), ".chisel", "tasks", `${taskId}.json`);
 
       if (!fs.existsSync(taskFile)) {
@@ -438,6 +468,10 @@ export function chiselMiddleware(
       }
 
       const task = JSON.parse(fs.readFileSync(taskFile, "utf-8"));
+      if (task.forwarding?.call) {
+        res.status(409).json({ error: "Remote tasks require an explicit Atem work_complete result; local completion cannot complete remote work" });
+        return;
+      }
       task.status = "completed";
       task.completedAt = new Date().toISOString();
       fs.writeFileSync(taskFile, JSON.stringify(task, null, 2), "utf-8");
@@ -448,29 +482,6 @@ export function chiselMiddleware(
       console.error("chisel task complete error:", error);
       res.status(500).json({ error: msg });
     }
-  });
-}
-
-async function forwardToAstation(
-  astation: AstationConfig,
-  taskId: string,
-  description: string,
-): Promise<boolean> {
-  // Dynamic import — ws is an optional peer dep, only needed when astation is configured
-  const { WebSocket } = (await import(/* webpackIgnore: true */ "ws" as any)) as { WebSocket: any };
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(astation.wsUrl);
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: "markTaskNotify",
-        data: { taskId, status: "pending", description },
-      }));
-      ws.close();
-      resolve(true);
-    };
-    ws.onerror = (err: any) => {
-      reject(err);
-    };
   });
 }
 

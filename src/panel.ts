@@ -72,6 +72,7 @@ export class DevPanel {
   private markColor = "#ef4444";
   private markSaving = false;
   private markResult = "";
+  private markResultWarning = false;
 
   // DOM refs
   private root: HTMLDivElement | null = null;
@@ -614,7 +615,7 @@ export class DevPanel {
     if (this.markSaving) {
       html += `<div style="margin-top:16px;padding:12px;background:${COLORS.infoBg};border-radius:4px;color:${COLORS.infoText};font-size:12px;text-align:center;">Capturing screenshot...</div>`;
     } else if (this.markResult) {
-      html += `<div style="margin-top:16px;padding:12px;background:#0a3622;border-radius:4px;color:#4ade80;font-size:12px;">${this.escapeHtml(this.markResult)}</div>`;
+      html += `<div style="margin-top:16px;padding:12px;background:${this.markResultWarning ? "#422006" : "#0a3622"};border-radius:4px;color:${this.markResultWarning ? "#fbbf24" : "#4ade80"};font-size:12px;">${this.escapeHtml(this.markResult)}</div>`;
     }
 
     html += `
@@ -631,6 +632,7 @@ export class DevPanel {
 
     this.markSaving = true;
     this.markResult = "";
+    this.markResultWarning = false;
     this.renderBody();
 
     try {
@@ -655,11 +657,15 @@ export class DevPanel {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || "Failed to save mark");
 
-      this.markResult = `Task saved: ${data.taskFile}${data.forwarded ? " (forwarded to Astation)" : ""}`;
+      this.markResultWarning = !!data.forwardingError;
+      this.markResult = data.forwarded
+        ? `Task accepted by Atem (${data.taskState || "queued"}): ${data.taskFile}`
+        : `Task saved: ${data.taskFile}${data.forwardingError ? `; ${data.forwardingError}${data.delivery === "uncertain" ? "; acceptance is unknown, check the task before sending again" : ""}` : ""}`;
       this.overlay.clear();
       this.overlay.hide();
       this.markTool = null;
     } catch (err) {
+      this.markResultWarning = true;
       this.markResult = `Error: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
       this.markSaving = false;
