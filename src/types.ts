@@ -26,6 +26,8 @@ export interface MiddlewareOptions {
   apiPrefix?: string;
   /** Optional Astation connection for forwarding tasks */
   astation?: AstationConfig;
+  /** Server-only online Station connection. The browser never receives its credential. */
+  station?: StationConfig;
 }
 
 export type IconLibrary = "lucide" | "fontawesome" | "material" | "unknown";
@@ -106,6 +108,19 @@ export interface MarkSnapshot {
 }
 
 export interface AstationConfig {
-  /** WebSocket URL for Astation hub, e.g. "ws://astation-host:8080/ws" */
+  /** @deprecated Task-ID-only forwarding is unsupported. Use MiddlewareOptions.station. */
   wsUrl: string;
+}
+
+export interface StationConfig {
+  /** HTTPS Station origin (HTTP is allowed only for loopback development). */
+  origin: string;
+  integrationId: string;
+  hostId: string;
+  sessionId: string;
+  /** An explicitly approved route from the target Atem's runtime.toml. */
+  routeId: string;
+  routeRevision: number;
+  /** Name of the server environment variable containing the integration bearer token. */
+  tokenEnv: string;
 }

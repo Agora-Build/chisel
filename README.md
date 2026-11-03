@@ -52,7 +52,7 @@ import express from "express";
 import { chiselMiddleware } from "@agora-build/chisel-dev/middleware";
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "12mb" })); // PNGs can be up to 8 MiB before base64.
 
 if (process.env.NODE_ENV !== "production") {
   chiselMiddleware(app, {
@@ -62,19 +62,59 @@ if (process.env.NODE_ENV !== "production") {
 }
 ```
 
-### With Astation (for AI agent routing)
+### With Station (online agent routing)
 
 ```ts
 chiselMiddleware(app, {
   cssFile: "src/index.css",
   srcDirs: ["src"],
-  astation: {
-    wsUrl: "ws://astation-host:8080/ws",
+  station: {
+    origin: "https://station.agora.build",
+    integrationId: "YOUR_INTEGRATION_ID",
+    hostId: "YOUR_ATEM_DEVICE_ID",
+    sessionId: "ses-REPLACE_WITH_TARGET_SESSION",
+    routeId: "ui",
+    routeRevision: 1,
+    tokenEnv: "CHISEL_STATION_TOKEN",
   },
 });
 ```
 
-When `astation` is configured, clicking "Ask Agent to Work on It" in the Mark tab saves the annotated screenshot and task data to `.chisel/tasks/`, then notifies [Astation](https://github.com/Agora-Build/Astation) which routes the task to an [Atem](https://github.com/Agora-Build/Atem) instance running Claude Code.
+Use Node 20.17+ and set `CHISEL_STATION_TOKEN` in the **server** environment.
+It must be an integration token approved for `agent.view` and `agent.prompt`.
+Never use a `VITE_` or `NEXT_PUBLIC_` credential variable. The config belongs in
+server code. A runnable server example is [examples/station.mjs](examples/station.mjs).
+
+The selected Atem runtime and an existing Claude/Codex session must be online.
+The runtime must enable hosting and explicitly approve the service in its launch
+profile and route. `routeRevision` must match its `runtime.toml`; changing the
+route or target process makes stale requests fail. Chisel fetches the selected
+session's fresh process generation before sending; it never guesses a host.
+
+Station's signed service grant needs `view`, `message`, `notify` and `prompt`,
+including the host/session/project scopes. New native provisioning can opt in
+with `markTasks: true`; existing grants do not gain permissions. Upgrade the
+shared SDK and account membership verifiers before enrolling these operations.
+Station PR #70 and its companion marks publisher keep the separate
+`host-work-api` build gate off in normal and existing `hosted-agent-api` builds.
+Permission agreement, verifier upgrades, native consent and live acceptance are
+required before activation; existing approved dev hosted execution is unchanged.
+
+"Ask Agent to Work on It" saves `.chisel/tasks/<id>.png` and `.json`, then sends
+the actual PNG to Station's authenticated marks endpoint. Success means Atem
+durably accepted the task. Node keeps the progress stream open after the browser
+gets that response. `GET /api/dev/tasks` exposes the stored progress: queued,
+blocked, submitted and `awaiting_result` (a finished turn still needs an explicit
+correlated completion result). The legacy `astation.wsUrl` task-ID-only sender
+now gives upgrade guidance instead of claiming success.
+
+Delivery is online only. There is no automatic retry, offline queue or replay
+after a server restart. If a reply is lost, local files and immutable IDs remain
+for diagnosis; acceptance is marked uncertain. Check the original task before
+creating another mark. Loss of progress after known acceptance is
+`monitoring_lost`, not proof the task failed. Node and the target Atem must remain
+running while delivery waits or runs. Monitoring is bounded to ten minutes;
+acceptance has a 30-second timeout. Local completion cannot complete remote work.
 
 ## API
 
@@ -97,7 +137,8 @@ Register save routes on an Express app or router. Adds these POST endpoints:
 - `POST {apiPrefix}/save-styles` -- update CSS variables in source file
 - `POST {apiPrefix}/save-content` -- find-and-replace text in source files
 - `POST {apiPrefix}/save-icons` -- replace icon imports in source files
-- `POST {apiPrefix}/save-mark` -- save annotated screenshot + task JSON, optionally notify Astation
+- `POST {apiPrefix}/save-mark` -- save PNG + task JSON, optionally send to Station and await durable acceptance
+- `GET {apiPrefix}/tasks` -- inspect saved task and forwarding progress
 
 `save-styles` and `save-content` accept `?commit=true` query param to auto-commit.
 
@@ -123,13 +164,20 @@ Register save routes on an Express app or router. Adds these POST endpoints:
 | `extensions` | `string[]` | `[".tsx", ".ts", ".jsx", ".js", ".vue", ".svelte"]` | File extensions to search |
 | `commitMessage` | `string` | `"style: update theme variables via chisel"` | Git commit message |
 | `apiPrefix` | `string` | `"/api/dev"` | API route prefix |
-| `astation` | `AstationConfig` | -- | Astation hub connection (enables mark task routing) |
+| `station` | `StationConfig` | -- | Server-only authenticated online mark delivery |
+| `astation` | `AstationConfig` | -- | Deprecated task-ID-only transport; returns upgrade guidance |
 
-### AstationConfig
+### StationConfig
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `wsUrl` | `string` | WebSocket URL for Astation hub, e.g. `"ws://astation-host:8080/ws"` |
+| `origin` | `string` | Station HTTPS origin; HTTP only for loopback development |
+| `integrationId` | `string` | Native-approved integration ID |
+| `hostId` | `string` | Explicit target Atem device ID |
+| `sessionId` | `string` | Existing Claude/Codex session ID |
+| `routeId` | `string` | Approved route ID from the target's `runtime.toml` |
+| `routeRevision` | `number` | Exact current route revision |
+| `tokenEnv` | `string` | Name of the server environment variable containing the bearer token |
 
 ## How It Works
 
@@ -141,7 +189,10 @@ Register save routes on an Express app or router. Adds these POST endpoints:
 
 **Icons tab**: Pick SVG icons from the page, detect their library (Lucide, FontAwesome, Material), type a replacement name, and rewrite the import in source files.
 
-**Mark tab**: Takes a screenshot of the page, overlays drawing tools (arrow, rectangle, text, freehand), and lets you annotate areas that need changes. Clicking "Ask Agent to Work on It" saves the annotated screenshot and task data to `.chisel/tasks/` on the server. If Astation is configured, a lightweight notification (task ID + description) is sent via WebSocket to route the task to an AI agent.
+**Mark tab**: Draw annotations on the page and capture them in a PNG. Clicking
+"Ask Agent to Work on It" saves the annotated PNG and task metadata locally.
+If Station is configured, the server sends PNG bytes and typed annotations
+through the authenticated API. Atem uses its ordinary agent-message queue.
 
 **Save**: The middleware receives variable overrides and does regex replacement in the CSS file (`--name: oldvalue;` -> `--name: newvalue;`). Content changes are string-replaced across all files in the configured source directories.
 
@@ -153,15 +204,23 @@ Browser (Chisel Dev panel)
   ↓ POST /api/dev/save-mark
 Express middleware
   ↓ Saves .chisel/tasks/{taskId}.json + .png
-  ↓ WS markTaskNotify → Astation (if configured)
-Astation hub
-  ↓ Routes markTaskAssignment → best Atem instance
+  ↓ Authenticated session lookup, then POST PNG + metadata to configured Station
+Station online marks API
+  ↓ Current token/policy/service membership and exact target checks
+  ↓ Encrypted R9 attachment_put chunks, then message_publish
 Atem
-  ↓ Reads task from local .chisel/tasks/
-  ↓ Builds prompt from annotations + screenshot
-  ↓ Sends to Claude Code
-  ↓ WS markTaskResult → Astation
+  ↓ Verifies PNG, stores task, returns durable acceptance
+  ↓ Shared FIFO queue → ready Claude/Codex session with local PNG path
+  ↓ Work receipt progress → Station NDJSON stream → Node task JSON
 ```
+
+## Development Tests
+
+`npm test` builds the package and tests PNG validation, authenticated upload,
+fragmented progress, durable acceptance, uncertainty and preservation of local
+files without retries. Station's isolated HTTP/R9 suite can invoke the real
+sender with `CHISEL_MARK_TEST_SCRIPT=/absolute/chisel/tests/station-live.mjs`.
+The tests use fixture credentials and no live coding-provider APIs.
 
 ## Entry Points
 
